@@ -1,0 +1,10 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y gcc libpcap-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY attack0.c /attack0.c
+
+RUN gcc /attack0.c -o /attack0 -lpcap
+
+ENTRYPOINT ["/attack0"]

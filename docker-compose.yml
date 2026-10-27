@@ -53,6 +53,19 @@ services:
       - "host.docker.internal:host-gateway"
     networks: [as3net]
 
+  attack-0:
+    build:
+      context: .
+      dockerfile: Dockerfile.attack0
+    network_mode: "service:as3_server"
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+       - ./captures:/captures
+    depends_on:
+      - as3_server
+
 networks:
   as3net:
     name: as3net
