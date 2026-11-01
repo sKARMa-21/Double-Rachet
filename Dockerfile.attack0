@@ -1,0 +1,17 @@
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    g++ \
+    libjson-c-dev \
+    tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY attacks/attack0.cpp /attack0.cpp
+
+RUN g++ -std=c++17 /attack0.cpp -o /attack0 \
+    -ljson-c -pthread
+
+ENV COUNTER_GAP=10
+
+CMD ["/attack0"]
