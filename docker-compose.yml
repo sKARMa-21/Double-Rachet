@@ -71,7 +71,17 @@ services:
     volumes:
       - ./captures:/captures
     networks: [as3net]
-
+  attack-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.attack1
+    depends_on:
+      - as3_server
+    cap_add:
+      - NET_RAW
+    volumes:
+      - ./captures:/captures
+    networks: [as3net]
 networks:
   as3net:
     name: as3net

@@ -3,7 +3,7 @@
 
 # Start server and Mallory in background
 up:
-	docker compose up -d --build as3_server attack-0
+	docker compose up -d --build as3_server attack-0 attack-1
 
 # Stop everything and reset saved sessions
 down:
@@ -36,3 +36,6 @@ status:
 capture:
 	-docker compose exec -T attack-0 tcpdump -i any -s 0 -U \
 		-w /captures/attack0.pcap 'tcp port 9000 or tcp port 9001'
+
+attack1:
+	docker compose run --rm --build attack-1
