@@ -27,7 +27,7 @@ services:
     command: ["/client"]
     environment:
       USER_NAME: bob
-      SERVER: attack-0:9001  # Only Bob connects through Mallory
+      SERVER: attack-2:9001  # Only Bob connects through Mallory
       OPK_COUNT: "5"
       STATE_DIR: /state
     stdin_open: true
@@ -43,7 +43,7 @@ services:
     command: ["/client"]
     environment:
       USER_NAME: alice
-      SERVER: as3_server:9000
+      SERVER: attack-2:9001 # alice connects to mallory for attack 2 as well.
       OPK_COUNT: "5"
       STATE_DIR: /state
     stdin_open: true
@@ -54,23 +54,23 @@ services:
       - "host.docker.internal:host-gateway"
     networks: [as3net]
 
-  attack-0:
-    build:
-      context: .
-      dockerfile: Dockerfile.attack0
-    environment:
-      UPSTREAM_HOST: as3_server
-      UPSTREAM_PORT: "9000"
-      LISTEN_PORT: "9001"
-      COUNTER_GAP: "${COUNTER_GAP:-10}"
-    depends_on:
-      - as3_server
-    cap_add:
-      - NET_RAW  # For optional tcpdump evidence only, not needed by proxy
-      - NET_ADMIN
-    volumes:
-      - ./captures:/captures
-    networks: [as3net]
+  # attack-0:
+  #  build:
+  #    context: .
+  #    dockerfile: Dockerfile.attack0
+  #   environment:
+  #    UPSTREAM_HOST: as3_server
+  #    UPSTREAM_PORT: "9000"
+  #    LISTEN_PORT: "9001"
+  #     COUNTER_GAP: "${COUNTER_GAP:-10}"
+  #   depends_on:
+  #    - as3_server
+  #   cap_add:
+  #    - NET_RAW  # For optional tcpdump evidence only, not needed by proxy
+  #    - NET_ADMIN
+  #   volumes:
+  #    - ./captures:/captures
+  #   networks: [as3net]
   attack-1:
     build:
       context: .
@@ -82,9 +82,21 @@ services:
     volumes:
       - ./captures:/captures
     networks: [as3net]
-networks:
-  as3net:
-    name: as3net
+   
+  attack-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.attack2
+    depends_on:
+      - as3_server
+    ports:
+      - "9001:9001"
+    networks: [as3net]
 
 volumes:
   as3state:
+
+networks:
+  as3net:
+    name: as3net
+ 

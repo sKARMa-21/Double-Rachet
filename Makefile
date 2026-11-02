@@ -1,9 +1,12 @@
 
-.PHONY: up down build bob alice logs stats status
+.PHONY: up down build bob alice logs stats status build2 logs2 a2
 
 # Start server and Mallory in background
 up:
 	docker compose up -d --build as3_server attack-0 attack-1
+
+a2: build2
+	docker compose up as3_server attack-2
 
 # Stop everything and reset saved sessions
 down:
@@ -39,3 +42,11 @@ capture:
 
 attack1:
 	docker compose run --rm --build attack-1
+
+# Build Attack 2
+build2:
+	docker compose build attack-2
+
+# View Attack 2 logs
+logs2:
+	docker compose logs -f attack-2
