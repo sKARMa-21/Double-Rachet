@@ -2,13 +2,11 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     g++ \
-    libjson-c-dev \
-    libssl-dev \
+    libsodium-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY attacks/attack2.cpp /attack2.cpp
 
-RUN g++ -std=c++17 /attack2.cpp -o /attack2 \
-    -ljson-c -lcrypto -pthread
+RUN g++ -O2 -std=c++17 /attack2.cpp -o /attack2 -lsodium -pthread
 
-CMD ["/attack2"]
+ENTRYPOINT ["/attack2"]

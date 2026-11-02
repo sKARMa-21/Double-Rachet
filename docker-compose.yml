@@ -91,6 +91,7 @@ services:
       - as3_server
     ports:
       - "9001:9001"
+    command: ["--port", "9001"]
     networks: [as3net]
 
 volumes:
